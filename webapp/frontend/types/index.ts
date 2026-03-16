@@ -43,7 +43,7 @@ export interface AppState {
   category: Category;
   topic: string;
   pexelsKey: string;
-  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels';
+  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels' | 'veo';
   videos: VideoInfo[];
   youtubeUrls: { url: string; name: string }[];
   generatedTitles: string[];

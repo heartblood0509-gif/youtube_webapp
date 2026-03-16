@@ -61,6 +61,7 @@ export default function Step3_TitleSelect({
     }
   }
 
+  const charCount = (t: string) => t.replace(/\s/g, '').length;
   const canNext = selectedTitle.length > 0;
 
   return (
@@ -69,6 +70,7 @@ export default function Step3_TitleSelect({
         <h2 className="text-2xl font-bold mb-2">타이틀 선택</h2>
         <p className="text-muted">
           AI가 후킹 타이틀을 생성합니다. 마음에 드는 것을 선택하거나 직접 입력하세요.
+          <span className="text-xs ml-1 opacity-60">(띄어쓰기 제외 16자 이내)</span>
         </p>
       </div>
 
@@ -102,7 +104,9 @@ export default function Step3_TitleSelect({
               }`}
             >
               <span className="text-lg">{title}</span>
-              <span className="ml-2 text-xs text-muted">({title.length}자)</span>
+              <span className={`ml-2 text-xs ${charCount(title) > 16 ? 'text-red-400' : 'text-muted'}`}>
+                ({charCount(title)}자{charCount(title) > 16 ? ' · 초과!' : ''})
+              </span>
             </button>
           ))}
         </div>
@@ -127,6 +131,11 @@ export default function Step3_TitleSelect({
             적용
           </button>
         </div>
+        {customTitle && (
+          <div className={`text-xs ${charCount(customTitle) > 16 ? 'text-red-400' : 'text-muted'}`}>
+            띄어쓰기 제외 {charCount(customTitle)}자 / 16자
+          </div>
+        )}
       </div>
 
       {/* 선택된 타이틀 */}

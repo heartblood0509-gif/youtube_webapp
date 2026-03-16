@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { TTSEngine, VideoInfo, ClipConfig } from '@/types';
 import { autoGenerateClips, smartGenerateClips, startBuild } from '@/lib/api';
+
+const BACKEND = 'http://localhost:8000';
 
 interface Props {
   projectId: string;
@@ -14,6 +16,7 @@ interface Props {
   bgmVolume: number;
   videos: VideoInfo[];
   clips: ClipConfig[];
+  videoSource?: string;
   onSetTTSEngine: (e: TTSEngine) => void;
   onSetTTSLanguage: (l: string) => void;
   onSetBgmVolume: (v: number) => void;
@@ -44,6 +47,7 @@ export default function Step5_TTSConfig({
   bgmVolume,
   videos,
   clips,
+  videoSource,
   onSetTTSEngine,
   onSetTTSLanguage,
   onSetBgmVolume,
@@ -57,6 +61,27 @@ export default function Step5_TTSConfig({
   const [autoClipsLoading, setAutoClipsLoading] = useState(false);
   const [smartClipsLoading, setSmartClipsLoading] = useState(false);
   const [clipMode, setClipMode] = useState<'none' | 'smart' | 'auto'>('none');
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+
+  const isVeo = videoSource === 'veo';
+
+  // Veo 영상일 때 자동 클립 생성 (각 영상 = 1문장)
+  useEffect(() => {
+    if (isVeo && clips.length === 0 && videos.length > 0) {
+      const veoVideos = videos
+        .filter(v => v.filename.startsWith('veo_'))
+        .sort((a, b) => a.filename.localeCompare(b.filename));
+      if (veoVideos.length > 0) {
+        const autoClips: ClipConfig[] = veoVideos.map(v => ({
+          source: `input/${v.filename}`,
+          start: 0,
+          end: v.duration,
+        }));
+        onSetClips(autoClips);
+        setClipMode('auto');
+      }
+    }
+  }, [isVeo, clips.length, videos, onSetClips]);
 
   async function handleSmartClips() {
     setSmartClipsLoading(true);
@@ -201,22 +226,29 @@ export default function Step5_TTSConfig({
               </span>
             )}
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleSmartClips}
-              disabled={smartClipsLoading || autoClipsLoading || videos.length === 0 || !geminiKey}
-              className="text-sm px-4 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors"
-            >
-              {smartClipsLoading ? 'AI 분석 중...' : 'AI 스마트 매칭'}
-            </button>
-            <button
-              onClick={handleAutoClips}
-              disabled={autoClipsLoading || smartClipsLoading || videos.length === 0}
-              className="text-sm px-4 py-1.5 bg-surface border border-border text-foreground rounded-lg hover:bg-surface-hover disabled:opacity-40 transition-colors"
-            >
-              {autoClipsLoading ? '생성 중...' : '자동 분배'}
-            </button>
-          </div>
+          {!isVeo && (
+            <div className="flex gap-2">
+              <button
+                onClick={handleSmartClips}
+                disabled={smartClipsLoading || autoClipsLoading || videos.length === 0 || !geminiKey}
+                className="text-sm px-4 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors"
+              >
+                {smartClipsLoading ? 'AI 분석 중...' : 'AI 스마트 매칭'}
+              </button>
+              <button
+                onClick={handleAutoClips}
+                disabled={autoClipsLoading || smartClipsLoading || videos.length === 0}
+                className="text-sm px-4 py-1.5 bg-surface border border-border text-foreground rounded-lg hover:bg-surface-hover disabled:opacity-40 transition-colors"
+              >
+                {autoClipsLoading ? '생성 중...' : '자동 분배'}
+              </button>
+            </div>
+          )}
+          {isVeo && clips.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 font-medium">
+              Veo AI 자동 매칭
+            </span>
+          )}
         </div>
 
         {/* 스마트 매칭 설명 */}
@@ -227,30 +259,58 @@ export default function Step5_TTSConfig({
         )}
 
         {clips.length > 0 && (
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {clips.map((clip, i) => (
-              <div
-                key={i}
-                className={`p-3 rounded-lg border text-xs ${
-                  clipMode === 'smart'
-                    ? 'bg-emerald-500/5 border-emerald-500/20'
-                    : 'bg-surface border-border'
-                }`}
-              >
-                {/* 문장 */}
-                {script[i] && (
-                  <div className="text-foreground mb-1.5 text-sm leading-snug">
-                    <span className="text-muted mr-1.5">{i + 1}.</span>
-                    {script[i].length > 50 ? script[i].slice(0, 50) + '...' : script[i]}
+          <div className="space-y-2 max-h-[500px] overflow-y-auto">
+            {clips.map((clip, i) => {
+              const videoUrl = `${BACKEND}/files/${projectId}/${clip.source}`;
+              const isOpen = previewIdx === i;
+              return (
+                <div
+                  key={i}
+                  className={`rounded-lg border text-xs overflow-hidden ${
+                    clipMode === 'smart'
+                      ? 'bg-emerald-500/5 border-emerald-500/20'
+                      : 'bg-surface border-border'
+                  }`}
+                >
+                  <div
+                    className="p-3 cursor-pointer hover:bg-white/5 transition-colors"
+                    onClick={() => setPreviewIdx(isOpen ? null : i)}
+                  >
+                    {/* 문장 */}
+                    {script[i] && (
+                      <div className="text-foreground mb-1.5 text-sm leading-snug">
+                        <span className="text-muted mr-1.5">{i + 1}.</span>
+                        {script[i].length > 50 ? script[i].slice(0, 50) + '...' : script[i]}
+                      </div>
+                    )}
+                    {/* 매칭된 영상 구간 */}
+                    <div className="flex items-center gap-2 text-muted">
+                      <span className="text-primary/80">{isOpen ? '▾' : '▸'} 미리보기</span>
+                      <span className="truncate">{clip.source.replace('input/', '')}</span>
+                      <span className="shrink-0">{clip.start.toFixed(1)}s ~ {clip.end.toFixed(1)}s</span>
+                    </div>
                   </div>
-                )}
-                {/* 매칭된 영상 구간 */}
-                <div className="flex items-center gap-2 text-muted">
-                  <span className="truncate">{clip.source.replace('input/', '')}</span>
-                  <span className="shrink-0">{clip.start.toFixed(1)}s ~ {clip.end.toFixed(1)}s</span>
+                  {/* 비디오 미리보기 */}
+                  {isOpen && (
+                    <div className="px-3 pb-3">
+                      <div className="rounded-lg overflow-hidden bg-black border border-border/50"
+                        style={{ maxHeight: '280px' }}
+                      >
+                        <video
+                          src={`${videoUrl}#t=${clip.start}`}
+                          controls
+                          playsInline
+                          autoPlay
+                          muted
+                          className="w-full h-full object-contain"
+                          style={{ maxHeight: '280px' }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

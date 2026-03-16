@@ -10,6 +10,7 @@ import Step4_ScriptReview from '@/components/steps/Step4_ScriptReview';
 import Step5_TTSConfig from '@/components/steps/Step5_TTSConfig';
 import Step6_Building from '@/components/steps/Step6_Building';
 import Step7_Result from '@/components/steps/Step7_Result';
+import Gallery from '@/components/Gallery';
 
 const INITIAL_STATE: AppState = {
   geminiKey: process.env.NEXT_PUBLIC_GEMINI_KEY || '',
@@ -38,6 +39,7 @@ const INITIAL_STATE: AppState = {
 
 export default function Home() {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const [showGallery, setShowGallery] = useState(false);
 
   const update = useCallback(<K extends keyof AppState>(key: K, value: AppState[K]) => {
     setState((prev) => ({ ...prev, [key]: value }));
@@ -62,6 +64,25 @@ export default function Home() {
 
   return (
     <WizardLayout currentStep={state.currentStep}>
+      {/* 갤러리 토글 버튼 */}
+      {!showGallery && state.currentStep < 5 && (
+        <div className="mb-4 flex justify-end">
+          <button
+            onClick={() => setShowGallery(true)}
+            className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-surface-hover transition-colors flex items-center gap-2"
+          >
+            <span>&#9654;</span> 완성 영상 갤러리
+          </button>
+        </div>
+      )}
+
+      {/* 갤러리 뷰 */}
+      {showGallery && (
+        <Gallery onClose={() => setShowGallery(false)} />
+      )}
+
+      {/* 메인 워크플로우 */}
+      {!showGallery && <>
       {/* API 키 상태 표시 (env에 키가 없을 때만 입력 필드 노출) */}
       {state.currentStep < 5 && (
         <div className="mb-6 p-3 bg-surface border border-border rounded-lg space-y-2">
@@ -184,6 +205,7 @@ export default function Home() {
           bgmVolume={state.bgmVolume}
           videos={state.videos}
           clips={state.clips}
+          videoSource={state.videoSource}
           onSetTTSEngine={(e: TTSEngine) => update('ttsEngine', e)}
           onSetTTSLanguage={(l: string) => update('ttsLanguage', l)}
           onSetBgmVolume={(v: number) => update('bgmVolume', v)}
@@ -216,6 +238,7 @@ export default function Home() {
           onReset={handleReset}
         />
       )}
+      </>}
     </WizardLayout>
   );
 }

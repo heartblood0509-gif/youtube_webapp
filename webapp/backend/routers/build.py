@@ -143,9 +143,27 @@ def get_build_result(project_id: str):
     for f in os.listdir(output_dir):
         if f.endswith(".mp4"):
             path = os.path.join(output_dir, f)
+            # ffprobe로 상세 정보 추출
+            import subprocess as sp
+            probe = sp.run(
+                f'ffprobe -v quiet -print_format json -show_format -show_streams "{path}"',
+                shell=True, capture_output=True, text=True,
+            )
+            width, height, duration = 0, 0, 0.0
+            try:
+                info = json.loads(probe.stdout)
+                vs = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), {})
+                width = int(vs.get("width", 0))
+                height = int(vs.get("height", 0))
+                duration = round(float(info.get("format", {}).get("duration", 0)), 1)
+            except Exception:
+                pass
             return {
                 "filename": f,
                 "url": f"/files/{project_id}/output/{f}",
+                "width": width,
+                "height": height,
+                "duration": duration,
                 "size_mb": round(os.path.getsize(path) / 1024 / 1024, 1),
             }
     return {"error": "완성 영상이 없습니다"}

@@ -29,7 +29,11 @@ async def run(cmd, desc=""):
     """비동기 subprocess 실행 - 이벤트 루프 차단 방지"""
     result = await asyncio.to_thread(_run_sync, cmd)
     if result.returncode != 0:
-        raise RuntimeError(f"{desc} 실패: {result.stderr[:500]}")
+        # stderr 끝부분에 실제 에러가 있음 (앞부분은 ffmpeg 배너)
+        err = result.stderr.strip()
+        # 마지막 3줄 또는 500자 중 더 유용한 쪽 사용
+        last_lines = "\n".join(err.split("\n")[-5:])
+        raise RuntimeError(f"{desc} 실패: {last_lines[-500:]}")
     return result
 
 
@@ -137,7 +141,11 @@ async def run_build(
     # === STEP 1: 클립 추출 ===
     await emit({"type": "progress", "step": "클립 추출", "step_number": 1, "total_steps": 5, "progress_percent": 10, "message": f"{n}개 클립 추출 중..."})
 
-    crop_vf = "crop='min(iw,ih):min(iw,ih):(iw-min(iw,ih))/2:(ih-min(iw,ih))/2',scale=1080:1080,setsar=1,pad=1080:1920:0:420:black"
+    # 가로 영상: 1:1 정사각형 크롭 → 1080x1920 패딩
+    crop_vf_landscape = "crop='min(iw,ih):min(iw,ih):(iw-min(iw,ih))/2:(ih-min(iw,ih))/2',scale=1080:1080,setsar=1,pad=1080:1920:0:420:black"
+    # 세로 영상 (Veo 등): 1080x1920에 맞게 스케일
+    crop_vf_portrait = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+
     for i in range(n):
         cfg = clips_config[i]
         src = os.path.join(project_dir, cfg["source"])
@@ -146,13 +154,22 @@ async def run_build(
         if not os.path.exists(src):
             raise RuntimeError(f"소스 영상 파일이 없습니다: {cfg['source']}")
 
+        # 소스 영상 비율 감지
+        probe = await asyncio.to_thread(
+            _run_sync,
+            f'ffprobe -v quiet -show_entries stream=width,height -of csv=p=0:s=x "{src}"',
+        )
+        dims = probe.stdout.strip().split('x') if probe.stdout.strip() else ['0', '0']
+        src_w, src_h = int(dims[0] or 0), int(dims[1] or 0)
+        crop_vf = crop_vf_portrait if src_h > src_w else crop_vf_landscape
+
         dur = clip_durations[i]
         out = os.path.join(temp, f"clip_{i:02d}.mp4")
 
         await emit({"type": "progress", "step": "클립 추출", "step_number": 1, "total_steps": 5, "progress_percent": 10 + int(15 * i / n), "message": f"클립 {i+1}/{n} 추출 중..."})
 
         await run(
-            f'ffmpeg -y -ss {cfg["start"]} -i "{src}" -t {dur} '
+            f'ffmpeg -hide_banner -y -ss {cfg["start"]} -i "{src}" -t {dur} '
             f'-vf "{crop_vf}" -an -c:v libx264 -preset fast -crf 18 "{out}"',
             f"클립 {i+1}",
         )
@@ -164,25 +181,50 @@ async def run_build(
     streams = "".join(f"[{i}:v]" for i in range(n))
     fc = f'{streams}concat=n={n}:v=1:a=0[outv]'
     await run(
-        f'ffmpeg -y {inputs} -filter_complex "{fc}" -map "[outv]" '
+        f'ffmpeg -hide_banner -y {inputs} -filter_complex "{fc}" -map "[outv]" '
         f'-c:v libx264 -preset fast -crf 18 -r 30 -pix_fmt yuv420p "{temp}/concat_raw.mp4"',
         "클립 연결",
     )
 
     # === STEP 3: 나레이션 정렬 + 오디오 믹싱 ===
+    # WAV 파일 존재 확인
+    missing_wav = []
+    for i in range(n):
+        wav_path = os.path.join(temp, f"sent_{i:02d}.wav")
+        if not os.path.exists(wav_path):
+            missing_wav.append(f"sent_{i:02d}.wav")
+    if missing_wav:
+        files_in_temp = os.listdir(temp)
+        raise RuntimeError(
+            f"TTS 음성 파일이 없습니다: {missing_wav}. "
+            f"temp_frames 내 파일: {files_in_temp}"
+        )
+
     await emit({"type": "progress", "step": "오디오 믹싱", "step_number": 3, "total_steps": 5, "progress_percent": 50, "message": "나레이션 정렬 + BGM 믹싱 중..."})
 
     narr_inputs = " ".join(f'-i "{temp}/sent_{i:02d}.wav"' for i in range(n))
-    delays = []
-    for i in range(n):
-        ms = int(clip_starts[i] * 1000)
-        delays.append(f"[{i}]adelay={ms}|{ms}[s{i}]")
-    mix_in = "".join(f"[s{i}]" for i in range(n))
-    fc_narr = ";".join(delays) + f";{mix_in}amix=inputs={n}:duration=longest:normalize=0"
-    await run(
-        f'ffmpeg -y {narr_inputs} -filter_complex "{fc_narr}" -t {total_dur} "{temp}/narration_aligned.wav"',
-        "나레이션 정렬",
-    )
+
+    if n == 1:
+        # 단일 문장: adelay + amix 없이 직접 사용
+        await run(
+            f'ffmpeg -hide_banner -y -i "{temp}/sent_00.wav" '
+            f'-af "apad=whole_dur={total_dur}" -t {total_dur} "{temp}/narration_aligned.wav"',
+            "나레이션 정렬",
+        )
+    else:
+        # 복수 문장: 인라인 filter_complex 사용
+        delays = []
+        for i in range(n):
+            ms = int(clip_starts[i] * 1000)
+            delays.append(f"[{i}]adelay={ms}|{ms}[s{i}]")
+        mix_in = "".join(f"[s{i}]" for i in range(n))
+        fc_narr = ";".join(delays) + f";{mix_in}amix=inputs={n}:duration=longest:normalize=0"
+
+        await run(
+            f'ffmpeg -hide_banner -y {narr_inputs} '
+            f"-filter_complex '{fc_narr}' -t {total_dur} \"{temp}/narration_aligned.wav\"",
+            "나레이션 정렬",
+        )
 
     # BGM 믹싱
     if bgm_path and os.path.exists(bgm_path):
@@ -193,14 +235,14 @@ async def run_build(
             f"[narr][bgm]amix=inputs=2:duration=first:normalize=0[aout]"
         )
         await run(
-            f'ffmpeg -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" -i "{bgm_path}" '
+            f'ffmpeg -hide_banner -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" -i "{bgm_path}" '
             f'-filter_complex "{fc_audio}" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 128k '
             f'-t {total_dur} "{temp}/mixed_audio.mp4"',
             "BGM 믹싱",
         )
     else:
         await run(
-            f'ffmpeg -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" '
+            f'ffmpeg -hide_banner -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" '
             f'-map 0:v -map 1:a -c:v copy -c:a aac -b:a 128k '
             f'-shortest "{temp}/mixed_audio.mp4"',
             "오디오 합성",
@@ -253,7 +295,7 @@ async def run_build(
     await emit({"type": "progress", "step": "자막 오버레이", "step_number": 4, "total_steps": 5, "progress_percent": 80, "message": "렌더링 중... (가장 오래 걸리는 단계)"})
 
     await run(
-        f'ffmpeg -y -i "{temp}/mixed_audio.mp4" -vf "{vf}" '
+        f'ffmpeg -hide_banner -y -i "{temp}/mixed_audio.mp4" -vf "{vf}" '
         f'-c:v libx264 -preset fast -crf 18 -c:a copy "{output_path}"',
         "오버레이 렌더링",
     )

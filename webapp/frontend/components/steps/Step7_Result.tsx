@@ -21,8 +21,10 @@ export default function Step7_Result({ projectId, result, onSetResult, onReset }
     async function fetch_result() {
       try {
         const res = await getBuildResult(projectId);
-        if (res.result) {
-          onSetResult(res.result);
+        if (res.error) return;
+        // API는 {filename, url, width, height, duration, size_mb} 직접 반환
+        if (res.filename) {
+          onSetResult(res as VideoResult);
         }
       } catch {
         // 재시도

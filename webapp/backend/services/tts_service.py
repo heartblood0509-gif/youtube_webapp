@@ -1,9 +1,12 @@
 import os
 import subprocess
 import asyncio
+import logging
 import time
 import requests
 from core.config import TYPECAST_API_KEY, TYPECAST_VOICE_ID, TYPECAST_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 def _run_sync(cmd):
@@ -33,15 +36,29 @@ async def generate_edge_tts(sentences: list[str], output_dir: str, language: str
         out_path = os.path.join(output_dir, f"sent_{i:02d}.wav")
         mp3_path = os.path.join(output_dir, f"sent_{i:02d}.mp3")
 
-        communicate = edge_tts.Communicate(sent, voice, rate="+10%")
-        await communicate.save(mp3_path)
+        logger.info(f"[TTS {i+1}/{len(sentences)}] 생성 중: {sent[:30]}...")
+
+        try:
+            communicate = edge_tts.Communicate(sent, voice, rate="+10%")
+            await communicate.save(mp3_path)
+        except Exception as e:
+            logger.error(f"[TTS {i+1}] edge_tts 실패: {e}")
+            raise RuntimeError(f"TTS mp3 생성 실패 (문장 {i+1}): {e}")
+
+        if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) == 0:
+            raise RuntimeError(f"TTS mp3 파일이 생성되지 않았습니다: sent_{i:02d}.mp3")
 
         # mp3 → wav 변환 (비동기)
-        await asyncio.to_thread(
-            subprocess.run,
-            f'ffmpeg -y -i "{mp3_path}" "{out_path}"',
-            shell=True, capture_output=True,
+        conv = await asyncio.to_thread(
+            _run_sync,
+            f'ffmpeg -hide_banner -y -i "{mp3_path}" "{out_path}"',
         )
+        if conv.returncode != 0:
+            logger.error(f"[TTS {i+1}] mp3→wav 변환 실패: {conv.stderr[-200:]}")
+            raise RuntimeError(f"TTS wav 변환 실패 (문장 {i+1}): {conv.stderr[-200:]}")
+
+        if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+            raise RuntimeError(f"TTS wav 파일이 생성되지 않았습니다: sent_{i:02d}.wav")
 
         # 듀레이션 측정 (비동기)
         r = await asyncio.to_thread(
@@ -49,6 +66,7 @@ async def generate_edge_tts(sentences: list[str], output_dir: str, language: str
             f'ffprobe -v quiet -show_entries format=duration -of csv=p=0 "{out_path}"',
         )
         dur = float(r.stdout.strip()) if r.stdout.strip() else 2.0
+        logger.info(f"[TTS {i+1}] 완료: {dur}s")
         results.append({"text": sent, "duration": round(dur, 2), "path": out_path})
 
     return results

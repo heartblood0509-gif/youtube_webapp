@@ -5,8 +5,9 @@ import type { VideoInfo } from '@/types';
 import {
   uploadVideos, downloadFromYoutube, analyzeVideos, createProject,
   aiSearchDownloadStream, pexelsSearchStream,
+  veoEstimate, veoGenerateStream,
 } from '@/lib/api';
-import type { SearchProgressEvent } from '@/lib/api';
+import type { SearchProgressEvent, VeoProgressEvent } from '@/lib/api';
 import { callGemini } from '@/lib/gemini';
 import { buildSearchQueryPrompt, buildPexelsKeywordPrompt } from '@/lib/prompts';
 
@@ -19,10 +20,10 @@ interface Props {
   category: string;
   topic: string;
   script: string[];
-  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels';
+  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels' | 'veo';
   videos: VideoInfo[];
   youtubeUrls: { url: string; name: string }[];
-  onChangeSource: (src: 'upload' | 'youtube' | 'ai' | 'pexels') => void;
+  onChangeSource: (src: 'upload' | 'youtube' | 'ai' | 'pexels' | 'veo') => void;
   onSetProjectId: (id: string) => void;
   onSetVideos: (v: VideoInfo[]) => void;
   onSetYoutubeUrls: (urls: { url: string; name: string }[]) => void;
@@ -53,6 +54,10 @@ export default function Step2_VideoSource({
   const [aiQueries, setAiQueries] = useState<string[]>([]);
   const [aiStatus, setAiStatus] = useState('');
   const [searchProgress, setSearchProgress] = useState<{ current: number; total: number; step: string; detail: string } | null>(null);
+  const [veoCostInfo, setVeoCostInfo] = useState<{ estimated_cost_usd: number; estimated_time_minutes: number } | null>(null);
+  const [veoCostConfirmed, setVeoCostConfirmed] = useState(false);
+  const [veoPrompts, setVeoPrompts] = useState<string[]>([]);
+
   async function ensureProject(): Promise<string> {
     if (projectId) return projectId;
     const name = `shorts_${Date.now()}`;
@@ -246,6 +251,84 @@ export default function Step2_VideoSource({
     }
   }
 
+  // ─── Veo 3.1 AI 영상 생성 ───
+  async function handleVeoGenerate() {
+    if (!geminiKey) {
+      setError('Gemini API 키를 먼저 입력하세요.');
+      return;
+    }
+    if (script.length === 0) {
+      setError('대본이 없습니다. 이전 단계에서 대본을 먼저 작성하세요.');
+      return;
+    }
+
+    // 비용 확인 단계
+    if (!veoCostConfirmed) {
+      setLoading(true);
+      setError('');
+      try {
+        const est = await veoEstimate(script.length);
+        setVeoCostInfo(est);
+      } catch {
+        setError('비용 견적 조회 실패');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setVeoPrompts([]);
+    setSearchProgress(null);
+    setAiStatus('Gemini가 영상 프롬프트를 생성하고 있습니다...');
+
+    try {
+      const pid = await ensureProject();
+
+      let clipErrors: string[] = [];
+      await veoGenerateStream(pid, geminiKey, script, category, topic, (event: VeoProgressEvent) => {
+        if (event.step === 'prompts') {
+          setAiStatus('프롬프트 생성 중...');
+        } else if (event.step === 'prompts_done') {
+          setVeoPrompts(event.prompts || []);
+          setAiStatus(`${event.count || 0}개 프롬프트 생성 완료! 영상 생성 시작...`);
+        } else if (event.step === 'generating') {
+          setSearchProgress({
+            current: event.current || 0,
+            total: event.total || script.length,
+            step: 'AI 영상 생성',
+            detail: event.sentence || '',
+          });
+          setAiStatus(event.message || `[${event.current}/${event.total}] AI 영상 생성 중...`);
+        } else if (event.step === 'generated') {
+          setAiStatus(event.message || `[${event.current}/${event.total}] 완료!`);
+        } else if (event.step === 'clip_error') {
+          const errMsg = event.message || '클립 생성 실패';
+          clipErrors.push(errMsg);
+          setAiStatus(`⚠ ${errMsg}`);
+          setError(errMsg);
+        } else if (event.step === 'done' || event.step === 'complete') {
+          setAiStatus(`${event.count || 0}개 AI 영상 생성 완료!`);
+          if (event.count === 0 && clipErrors.length > 0) {
+            setError(`모든 클립 생성 실패. 에러: ${clipErrors[0]}`);
+          }
+        }
+      });
+
+      const analysis = await analyzeVideos(pid);
+      onSetVideos(analysis.videos || []);
+      setAiStatus(`완료! ${analysis.videos?.length || 0}개 AI 영상 준비됨`);
+      setSearchProgress(null);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Veo 영상 생성 실패');
+      setAiStatus('');
+      setSearchProgress(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function addUrlRow() {
     onSetYoutubeUrls([...youtubeUrls, { url: '', name: '' }]);
   }
@@ -269,8 +352,8 @@ export default function Step2_VideoSource({
         <p className="text-muted">영상을 직접 제공하거나, AI가 대본에 맞는 영상을 자동으로 찾아줍니다.</p>
       </div>
 
-      {/* 소스 선택 - 4가지 */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {/* 소스 선택 - 5가지 */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <button
           onClick={() => onChangeSource('pexels')}
           className={`p-4 rounded-lg border text-left transition-all ${
@@ -314,6 +397,17 @@ export default function Step2_VideoSource({
         >
           <div className="font-medium mb-1">유튜브 URL</div>
           <div className="text-xs text-muted">유튜브 URL을 직접 입력</div>
+        </button>
+        <button
+          onClick={() => onChangeSource('veo')}
+          className={`p-4 rounded-lg border text-left transition-all ${
+            videoSource === 'veo'
+              ? 'border-purple-500 bg-purple-500/10 ring-1 ring-purple-500'
+              : 'border-border bg-surface hover:bg-surface-hover'
+          }`}
+        >
+          <div className="font-medium mb-1 text-purple-400">Veo 3.1 AI</div>
+          <div className="text-xs text-muted">AI로 영상 직접 생성 (유료)</div>
         </button>
       </div>
 
@@ -515,6 +609,93 @@ export default function Step2_VideoSource({
               {loading ? '다운로드 중...' : '다운로드 시작'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Veo 3.1 AI 영상 생성 */}
+      {videoSource === 'veo' && (
+        <div className="space-y-4">
+          <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-lg">
+            <div className="text-sm mb-3">
+              <span className="text-purple-400 font-medium">Veo 3.1 AI 영상 생성</span> 과정:
+            </div>
+            <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
+              <li>Gemini가 각 대본 문장을 영어 영상 프롬프트로 변환</li>
+              <li>Google Veo 3.1이 9:16 세로 영상 클립을 생성 (문장당 8초)</li>
+              <li>각 영상이 대본 문장에 정확히 매칭됨 (스마트 매칭 불필요)</li>
+            </ol>
+            <div className="mt-3 text-xs text-purple-400/70">
+              비용 ~$0.35/초 | 문장당 1~6분 | 720p 9:16 세로
+            </div>
+          </div>
+
+          {/* 비용 확인 다이얼로그 */}
+          {veoCostInfo && !veoCostConfirmed && (
+            <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
+              <div className="text-sm font-medium text-amber-400">비용 확인</div>
+              <div className="text-xs text-muted space-y-1">
+                <div>클립 수: {script.length}개 x 8초 = {script.length * 8}초</div>
+                <div>예상 비용: <span className="text-amber-400 font-bold">${veoCostInfo.estimated_cost_usd}</span></div>
+                <div>예상 시간: ~{veoCostInfo.estimated_time_minutes}분</div>
+              </div>
+              <button
+                onClick={() => { setVeoCostConfirmed(true); setTimeout(handleVeoGenerate, 0); }}
+                className="w-full py-2 bg-amber-500 text-black font-medium rounded-lg hover:bg-amber-600 transition-colors"
+              >
+                비용 확인, 생성 시작
+              </button>
+            </div>
+          )}
+
+          {/* 생성 버튼 */}
+          {(!veoCostInfo || veoCostConfirmed) && (
+            <button
+              onClick={handleVeoGenerate}
+              disabled={loading || script.length === 0}
+              className="w-full py-3 bg-purple-500 text-white font-medium rounded-lg hover:bg-purple-600 disabled:opacity-40 transition-colors"
+            >
+              {loading ? 'AI 영상 생성 중...' : `Veo 3.1 AI 영상 생성 (${script.length}개 클립)`}
+            </button>
+          )}
+
+          {/* 진행 상태 */}
+          {aiStatus && videoSource === 'veo' && (
+            <div className="p-3 bg-purple-500/5 border border-purple-500/20 rounded-lg text-sm text-purple-300 space-y-2">
+              <div className="flex items-center">
+                {loading && <span className="inline-block animate-pulse mr-2">●</span>}
+                {aiStatus}
+              </div>
+              {searchProgress && loading && (
+                <div className="space-y-1">
+                  <div className="w-full bg-zinc-800 rounded-full h-2">
+                    <div
+                      className="bg-purple-500 h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.round((searchProgress.current / searchProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-muted">
+                    {searchProgress.step} {searchProgress.current}/{searchProgress.total}
+                    {searchProgress.detail && ` — ${searchProgress.detail.length > 30 ? searchProgress.detail.slice(0, 30) + '...' : searchProgress.detail}`}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 생성된 프롬프트 미리보기 */}
+          {veoPrompts.length > 0 && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-muted">생성된 영상 프롬프트</label>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {veoPrompts.map((p, i) => (
+                  <div key={i} className="p-2 bg-purple-500/5 border border-purple-500/10 rounded text-xs">
+                    <span className="text-muted mr-1">{i + 1}.</span>
+                    <span className="text-purple-300">{p}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

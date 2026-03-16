@@ -290,6 +290,109 @@ export async function pexelsSearchStream(
   return result;
 }
 
+// ─── Veo 3.1 AI 영상 생성 ───
+
+export interface VeoProgressEvent {
+  step: 'prompts' | 'prompts_done' | 'generating' | 'generated' | 'clip_error' | 'done' | 'complete' | 'error';
+  current?: number;
+  total?: number;
+  prompt?: string;
+  prompts?: string[];
+  sentence?: string;
+  filename?: string;
+  elapsed?: number;
+  count?: number;
+  videos?: unknown[];
+  message?: string;
+}
+
+export async function veoEstimate(sentenceCount: number, duration: number = 8) {
+  const res = await fetch(`${BACKEND}/api/veo/estimate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sentence_count: sentenceCount, duration }),
+  });
+  return res.json();
+}
+
+export async function veoGenerateStream(
+  projectId: string,
+  geminiKey: string,
+  sentences: string[],
+  category: string,
+  topic: string,
+  onProgress: (event: VeoProgressEvent) => void,
+): Promise<{ videos: unknown[]; count: number }> {
+  const res = await fetch(`${BACKEND}/api/veo/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId,
+      gemini_key: geminiKey,
+      sentences,
+      category,
+      topic,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail?.[0]?.msg || `서버 오류: ${res.status}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('스트림을 열 수 없습니다');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = { videos: [] as unknown[], count: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const event: VeoProgressEvent = JSON.parse(line.slice(6));
+        onProgress(event);
+
+        if (event.step === 'complete') {
+          result = { videos: event.videos || [], count: event.count || 0 };
+        }
+        if (event.step === 'error') {
+          throw new Error(event.message || 'Veo 영상 생성 중 오류');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message !== 'Veo 영상 생성 중 오류') continue;
+        throw e;
+      }
+    }
+  }
+
+  return result;
+}
+
+export interface GalleryVideo {
+  project_id: string;
+  filename: string;
+  url: string;
+  width: number;
+  height: number;
+  duration: number;
+  size_mb: number;
+  created_at: number;
+}
+
+export async function getGallery(): Promise<{ videos: GalleryVideo[] }> {
+  const res = await fetch(`${BACKEND}/api/projects/gallery`);
+  return res.json();
+}
+
 export async function startBuild(data: {
   project_id: string;
   title_text: string;

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from core.config import PROJECTS_DIR
-from routers import projects, videos, build, agent, pexels
+from routers import projects, videos, build, agent, pexels, veo
 
 app = FastAPI(title="YouTube Shorts 자동 제작기")
 
@@ -28,6 +28,7 @@ app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
 app.include_router(build.router, prefix="/api/build", tags=["build"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 app.include_router(pexels.router, prefix="/api/pexels", tags=["pexels"])
+app.include_router(veo.router, prefix="/api/veo", tags=["veo"])
 
 
 @app.get("/api/health")
