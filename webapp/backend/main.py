@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from core.config import PROJECTS_DIR
-from routers import projects, videos, build, agent, pexels, veo
+from routers import projects, videos, build, agent, pexels, veo, imagen
 
 app = FastAPI(title="YouTube Shorts 자동 제작기")
 
@@ -29,8 +29,19 @@ app.include_router(build.router, prefix="/api/build", tags=["build"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 app.include_router(pexels.router, prefix="/api/pexels", tags=["pexels"])
 app.include_router(veo.router, prefix="/api/veo", tags=["veo"])
+app.include_router(imagen.router, prefix="/api/imagen", tags=["imagen"])
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "message": "YouTube Shorts 빌더 서버 실행 중"}
+
+
+@app.get("/api/config")
+def get_config():
+    """프론트엔드에 API 키 설정 여부만 전달 (실제 키 노출 없음)"""
+    from core.config import GEMINI_API_KEY, PEXELS_API_KEY
+    return {
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "pexels_configured": bool(PEXELS_API_KEY),
+    }

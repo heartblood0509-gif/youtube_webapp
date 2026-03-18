@@ -6,7 +6,7 @@ import threading
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR
+from core.config import PROJECTS_DIR, validate_project_id, GEMINI_API_KEY
 from services.veo_service import generate_all_videos, estimate_cost
 
 router = APIRouter()
@@ -35,6 +35,8 @@ async def veo_estimate(req: VeoEstimateRequest):
 @router.post("/generate")
 async def veo_generate(req: VeoGenerateRequest):
     """Veo 3.1 영상 생성 (SSE 스트림)"""
+    validate_project_id(req.project_id)
+    gemini_key = req.gemini_key or GEMINI_API_KEY
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -47,7 +49,7 @@ async def veo_generate(req: VeoGenerateRequest):
     def run_in_thread():
         try:
             result = generate_all_videos(
-                gemini_key=req.gemini_key,
+                gemini_key=gemini_key,
                 sentences=req.sentences,
                 category=req.category,
                 topic=req.topic,

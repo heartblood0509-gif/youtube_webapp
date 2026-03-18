@@ -13,8 +13,9 @@ DOWNLOAD_TIMEOUT = 90
 def ffprobe_info(filepath: str) -> dict:
     """ffprobe로 영상 메타데이터 조회"""
     r = subprocess.run(
-        f'ffprobe -v quiet -print_format json -show_format -show_streams "{filepath}"',
-        shell=True, capture_output=True, text=True,
+        ["ffprobe", "-v", "quiet", "-print_format", "json",
+         "-show_format", "-show_streams", filepath],
+        capture_output=True, text=True,
     )
     if r.returncode != 0:
         return {}
@@ -41,15 +42,17 @@ def analyze_video(filepath: str) -> dict:
 
 def download_youtube(url: str, output_path: str) -> bool:
     """yt-dlp로 유튜브 영상 다운로드 (타임아웃 적용)"""
-    cmd = (
-        f'yt-dlp -f "bestvideo[height>=720][height<=1080][ext=mp4]+bestaudio[ext=m4a]'
-        f'/best[height>=720][height<=1080][ext=mp4]/best" '
-        f'--merge-output-format mp4 '
-        f'--no-playlist '
-        f'-o "{output_path}" "{url}"'
-    )
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[height>=720][height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+              "/best[height>=720][height<=1080][ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "--no-playlist",
+        "-o", output_path,
+        url,
+    ]
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT)
         return r.returncode == 0
     except subprocess.TimeoutExpired:
         logger.warning(f"다운로드 타임아웃 ({DOWNLOAD_TIMEOUT}s): {url}")
@@ -63,13 +66,14 @@ def download_youtube(url: str, output_path: str) -> bool:
 
 def search_youtube(query: str, max_results: int = 3) -> list[dict]:
     """yt-dlp로 유튜브 검색 → 영상 정보 목록 반환"""
-    cmd = (
-        f'yt-dlp "ytsearch{max_results}:{query}" '
-        f'--dump-json --no-download --flat-playlist '
-        f'--no-warnings 2>/dev/null'
-    )
+    cmd = [
+        "yt-dlp",
+        f"ytsearch{max_results}:{query}",
+        "--dump-json", "--no-download", "--flat-playlist",
+        "--no-warnings",
+    ]
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=SEARCH_TIMEOUT)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=SEARCH_TIMEOUT)
     except subprocess.TimeoutExpired:
         logger.warning(f"검색 타임아웃 ({SEARCH_TIMEOUT}s): {query}")
         return []

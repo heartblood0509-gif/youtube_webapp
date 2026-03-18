@@ -6,7 +6,7 @@ import threading
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR
+from core.config import PROJECTS_DIR, validate_project_id, PEXELS_API_KEY
 from services.pexels_service import search_and_download_pexels
 
 router = APIRouter()
@@ -22,6 +22,8 @@ class PexelsSearchRequest(BaseModel):
 @router.post("/search-videos")
 async def pexels_search_videos(req: PexelsSearchRequest):
     """Pexels 스톡 영상 검색 + 다운로드 (SSE 스트림)"""
+    validate_project_id(req.project_id)
+    pexels_key = req.pexels_key or PEXELS_API_KEY
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -34,7 +36,7 @@ async def pexels_search_videos(req: PexelsSearchRequest):
     def run_in_thread():
         try:
             result = search_and_download_pexels(
-                api_key=req.pexels_key,
+                api_key=pexels_key,
                 keywords=req.keywords,
                 output_dir=input_dir,
                 max_per_keyword=req.max_per_keyword,

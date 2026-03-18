@@ -6,7 +6,7 @@ import threading
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR
+from core.config import PROJECTS_DIR, validate_project_id
 from services.claude_agent import run_agent
 
 router = APIRouter()
@@ -23,6 +23,7 @@ class AgentSearchRequest(BaseModel):
 @router.post("/search-videos")
 async def agent_search_videos(req: AgentSearchRequest):
     """Claude 에이전트가 자율적으로 영상 검색/다운로드/평가 (SSE 스트림)"""
+    validate_project_id(req.project_id)
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
 

@@ -1,7 +1,34 @@
 import os
+import re
+import pathlib
+
+from dotenv import load_dotenv
+
+# backend/.env 파일에서 환경변수 로드 (API 키 등)
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECTS_DIR = os.path.join(BASE_DIR, "..", "projects")
+
+# API Keys (백엔드 환경변수에서 로드 — 프론트엔드에 노출하지 않음)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+
+
+def validate_project_id(project_id: str) -> str:
+    """project_id 검증 — Path Traversal 방지
+
+    영문, 숫자, 한글, 언더스코어, 하이픈만 허용.
+    ../ 등 경로 탈출 패턴을 차단한다.
+    """
+    if not project_id or not re.match(r'^[\w\-]+$', project_id):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 프로젝트 ID: {project_id}")
+    resolved = pathlib.Path(PROJECTS_DIR, project_id).resolve()
+    if not resolved.is_relative_to(pathlib.Path(PROJECTS_DIR).resolve()):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="프로젝트 경로 접근이 거부되었습니다")
+    return project_id
 SHARED_BGM_DIR = os.path.join(BASE_DIR, "..", "shared", "bgm")
 
 # 빌드 상수 (SKILL.md 기준)

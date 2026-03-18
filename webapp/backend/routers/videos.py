@@ -6,7 +6,7 @@ import threading
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR
+from core.config import PROJECTS_DIR, validate_project_id, GEMINI_API_KEY
 from services.video_service import (
     analyze_video, download_youtube, auto_generate_clips,
     search_and_download, MAX_QUERIES,
@@ -25,6 +25,7 @@ async def upload_videos(
     project_id: str = Form(...),
     files: list[UploadFile] = File(...),
 ):
+    validate_project_id(project_id)
     project_dir = os.path.join(PROJECTS_DIR, project_id, "input")
     os.makedirs(project_dir, exist_ok=True)
     saved = []
@@ -45,6 +46,7 @@ class DownloadRequest(BaseModel):
 
 @router.post("/download")
 def download_videos(req: DownloadRequest):
+    validate_project_id(req.project_id)
     input_dir = os.path.join(PROJECTS_DIR, req.project_id, "input")
     os.makedirs(input_dir, exist_ok=True)
     results = []
@@ -57,6 +59,7 @@ def download_videos(req: DownloadRequest):
 
 @router.get("/analyze/{project_id}")
 def analyze_project_videos(project_id: str):
+    validate_project_id(project_id)
     input_dir = os.path.join(PROJECTS_DIR, project_id, "input")
     if not os.path.isdir(input_dir):
         return {"videos": []}
@@ -76,6 +79,7 @@ class AutoClipRequest(BaseModel):
 
 @router.post("/auto-clips")
 def generate_auto_clips(req: AutoClipRequest):
+    validate_project_id(req.project_id)
     input_dir = os.path.join(PROJECTS_DIR, req.project_id, "input")
     if not os.path.isdir(input_dir):
         return {"clips": []}
@@ -91,13 +95,15 @@ def generate_auto_clips(req: AutoClipRequest):
 
 class SmartClipRequest(BaseModel):
     project_id: str
-    gemini_key: str
+    gemini_key: str = ""
     sentences: list[str]
 
 
 @router.post("/smart-clips")
 def generate_smart_clips(req: SmartClipRequest):
     """Gemini Vision으로 대본-영상 스마트 매칭"""
+    validate_project_id(req.project_id)
+    gemini_key = req.gemini_key or GEMINI_API_KEY
     input_dir = os.path.join(PROJECTS_DIR, req.project_id, "input")
     if not os.path.isdir(input_dir):
         return {"clips": [], "error": "입력 영상이 없습니다"}
@@ -115,7 +121,7 @@ def generate_smart_clips(req: SmartClipRequest):
 
     project_dir = os.path.join(PROJECTS_DIR, req.project_id)
     clips = smart_generate_clips(
-        gemini_key=req.gemini_key,
+        gemini_key=gemini_key,
         project_dir=project_dir,
         videos=videos,
         sentences=req.sentences,
@@ -140,6 +146,7 @@ class AISearchRequest(BaseModel):
 @router.post("/ai-search-download")
 def ai_search_and_download(req: AISearchRequest):
     """AI가 생성한 검색어로 유튜브 검색 후 다운로드 (동기 방식 - 레거시)"""
+    validate_project_id(req.project_id)
     input_dir = os.path.join(PROJECTS_DIR, req.project_id, "input")
     queries = req.queries[:MAX_QUERIES]
     downloaded = search_and_download(queries, input_dir, req.max_per_query)
@@ -149,6 +156,8 @@ def ai_search_and_download(req: AISearchRequest):
 @router.post("/ai-search-stream")
 async def ai_search_stream(req: AISearchRequest):
     """AI 검색 + 다운로드를 SSE로 실시간 진행률 전송"""
+    validate_project_id(req.project_id)
+    gemini_key = req.gemini_key or GEMINI_API_KEY
     job_id = str(uuid.uuid4())[:8]
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -169,9 +178,9 @@ async def ai_search_stream(req: AISearchRequest):
             )
 
             # AI 영상 적합성 검증
-            if req.gemini_key and result:
+            if gemini_key and result:
                 verified = verify_videos(
-                    gemini_key=req.gemini_key,
+                    gemini_key=gemini_key,
                     video_dir=input_dir,
                     topic=req.topic,
                     category=req.category,

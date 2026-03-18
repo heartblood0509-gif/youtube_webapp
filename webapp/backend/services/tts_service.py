@@ -10,8 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 def _run_sync(cmd):
-    """동기 subprocess 실행 (스레드 풀에서 호출)"""
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    """동기 subprocess 실행 (스레드 풀에서 호출) — 리스트 인수만 허용"""
+    if isinstance(cmd, str):
+        raise ValueError("보안상 문자열 명령은 허용되지 않습니다. 리스트를 사용하세요.")
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 async def generate_edge_tts(sentences: list[str], output_dir: str, language: str = "ko") -> list[dict]:
@@ -20,7 +22,7 @@ async def generate_edge_tts(sentences: list[str], output_dir: str, language: str
         import edge_tts
     except ImportError:
         await asyncio.to_thread(
-            subprocess.run, "pip3 install edge-tts", shell=True, capture_output=True
+            subprocess.run, ["pip3", "install", "edge-tts"], capture_output=True
         )
         import edge_tts
 
@@ -48,10 +50,10 @@ async def generate_edge_tts(sentences: list[str], output_dir: str, language: str
         if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) == 0:
             raise RuntimeError(f"TTS mp3 파일이 생성되지 않았습니다: sent_{i:02d}.mp3")
 
-        # mp3 → wav 변환 (비동기)
+        # mp3 → wav 변환 (비동기) — 리스트 인수로 경로 공백 안전 처리
         conv = await asyncio.to_thread(
             _run_sync,
-            f'ffmpeg -hide_banner -y -i "{mp3_path}" "{out_path}"',
+            ["ffmpeg", "-hide_banner", "-y", "-i", mp3_path, out_path],
         )
         if conv.returncode != 0:
             logger.error(f"[TTS {i+1}] mp3→wav 변환 실패: {conv.stderr[-200:]}")
@@ -63,7 +65,8 @@ async def generate_edge_tts(sentences: list[str], output_dir: str, language: str
         # 듀레이션 측정 (비동기)
         r = await asyncio.to_thread(
             _run_sync,
-            f'ffprobe -v quiet -show_entries format=duration -of csv=p=0 "{out_path}"',
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", out_path],
         )
         dur = float(r.stdout.strip()) if r.stdout.strip() else 2.0
         logger.info(f"[TTS {i+1}] 완료: {dur}s")
@@ -117,7 +120,8 @@ async def generate_typecast_tts(sentences: list[str], output_dir: str, speed: fl
         # 듀레이션 측정 (비동기)
         r = await asyncio.to_thread(
             _run_sync,
-            f'ffprobe -v quiet -show_entries format=duration -of csv=p=0 "{out_path}"',
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", out_path],
         )
         dur = float(r.stdout.strip()) if r.stdout.strip() else 2.0
         results.append({"text": sent, "duration": round(dur, 2), "path": out_path})

@@ -64,15 +64,17 @@ export default function Step5_TTSConfig({
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
 
   const isVeo = videoSource === 'veo';
+  const isImagen = videoSource === 'imagen';
 
-  // Veo 영상일 때 자동 클립 생성 (각 영상 = 1문장)
+  // Veo/Imagen 영상일 때 자동 클립 생성 (각 영상 = 1문장)
   useEffect(() => {
-    if (isVeo && clips.length === 0 && videos.length > 0) {
-      const veoVideos = videos
-        .filter(v => v.filename.startsWith('veo_'))
+    if ((isVeo || isImagen) && clips.length === 0 && videos.length > 0) {
+      const prefix = isVeo ? 'veo_' : 'imagen_';
+      const matchedVideos = videos
+        .filter(v => v.filename.startsWith(prefix))
         .sort((a, b) => a.filename.localeCompare(b.filename));
-      if (veoVideos.length > 0) {
-        const autoClips: ClipConfig[] = veoVideos.map(v => ({
+      if (matchedVideos.length > 0) {
+        const autoClips: ClipConfig[] = matchedVideos.map(v => ({
           source: `input/${v.filename}`,
           start: 0,
           end: v.duration,
@@ -81,7 +83,7 @@ export default function Step5_TTSConfig({
         setClipMode('auto');
       }
     }
-  }, [isVeo, clips.length, videos, onSetClips]);
+  }, [isVeo, isImagen, clips.length, videos, onSetClips]);
 
   async function handleSmartClips() {
     setSmartClipsLoading(true);
@@ -226,7 +228,7 @@ export default function Step5_TTSConfig({
               </span>
             )}
           </div>
-          {!isVeo && (
+          {!isVeo && !isImagen && (
             <div className="flex gap-2">
               <button
                 onClick={handleSmartClips}
@@ -247,6 +249,11 @@ export default function Step5_TTSConfig({
           {isVeo && clips.length > 0 && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 font-medium">
               Veo AI 자동 매칭
+            </span>
+          )}
+          {isImagen && clips.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 font-medium">
+              Imagen AI 자동 매칭
             </span>
           )}
         </div>

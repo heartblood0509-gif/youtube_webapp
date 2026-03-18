@@ -10,7 +10,8 @@ interface Props {
 }
 
 const CATEGORIES: { value: Category; label: string; desc: string }[] = [
-  { value: 'cosmetics', label: '화장품/스킨케어', desc: 'FOMO, 성분 강조, 결핍 자극' },
+  { value: 'cosmetics_info', label: '화장품 정보성', desc: '증상 공감 → 오해 지적 → 근본 원인 → 해결 원리' },
+  { value: 'cosmetics_ad', label: '화장품 광고성', desc: '극단적 공감 → 성분 소개 → 제품 공개 → 감성 CTA' },
   { value: 'cruise', label: '크루즈 여행', desc: '경험/모험 강조, 놀라움 유발' },
   { value: 'other', label: '기타 주제', desc: '궁금증 유발, 명령형, 숫자 활용' },
 ];
@@ -28,7 +29,7 @@ export default function Step1_Category({ category, topic, onChange, onNext }: Pr
       {/* 카테고리 선택 */}
       <div className="space-y-3">
         <label className="text-sm font-medium text-muted">카테고리</label>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.value}

@@ -1,11 +1,12 @@
 import os
 import json
 import uuid
+import shutil
 import asyncio
 from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR, BGM_VOLUME_DEFAULT
+from core.config import PROJECTS_DIR, BGM_VOLUME_DEFAULT, validate_project_id
 from core.events import event_manager
 from services.build_pipeline import run_build
 from services.tts_service import generate_edge_tts, generate_typecast_tts
@@ -28,7 +29,11 @@ async def _build_task(job_id: str, req: BuildRequest):
     """백그라운드 빌드 태스크"""
     project_dir = os.path.join(PROJECTS_DIR, req.project_id)
     temp_dir = os.path.join(project_dir, "temp_frames")
-    os.makedirs(temp_dir, exist_ok=True)
+
+    # 이전 빌드의 잔여 파일 정리 (stale clip/concat 파일이 남아있으면 혼동 유발)
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    os.makedirs(temp_dir)
 
     async def emit(event):
         await event_manager.emit(job_id, event)
@@ -74,6 +79,15 @@ async def _build_task(job_id: str, req: BuildRequest):
         if not tts_results:
             raise RuntimeError("TTS 생성 결과가 비어 있습니다.")
 
+        # TTS wav 파일 존재 확인 (run_build 진입 전 검증)
+        missing = []
+        for i in range(len(tts_results)):
+            wav = os.path.join(temp_dir, f"sent_{i:02d}.wav")
+            if not os.path.exists(wav):
+                missing.append(f"sent_{i:02d}.wav")
+        if missing:
+            raise RuntimeError(f"TTS 생성 후 wav 파일 누락: {missing}")
+
         await emit({
             "type": "progress", "step": "TTS 완료",
             "step_number": 1, "total_steps": 5,
@@ -105,6 +119,7 @@ async def _build_task(job_id: str, req: BuildRequest):
 
 @router.post("/start")
 async def start_build(req: BuildRequest, background_tasks: BackgroundTasks):
+    validate_project_id(req.project_id)
     job_id = str(uuid.uuid4())[:8]
     event_manager.create_job(job_id)
     background_tasks.add_task(_build_task, job_id, req)
@@ -137,6 +152,7 @@ async def build_progress(job_id: str):
 
 @router.get("/result/{project_id}")
 def get_build_result(project_id: str):
+    validate_project_id(project_id)
     output_dir = os.path.join(PROJECTS_DIR, project_id, "output")
     if not os.path.isdir(output_dir):
         return {"error": "출력 폴더가 없습니다"}
@@ -146,8 +162,9 @@ def get_build_result(project_id: str):
             # ffprobe로 상세 정보 추출
             import subprocess as sp
             probe = sp.run(
-                f'ffprobe -v quiet -print_format json -show_format -show_streams "{path}"',
-                shell=True, capture_output=True, text=True,
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", "-show_streams", path],
+                capture_output=True, text=True,
             )
             width, height, duration = 0, 0, 0.0
             try:

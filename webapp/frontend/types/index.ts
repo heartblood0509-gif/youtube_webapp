@@ -1,4 +1,4 @@
-export type Category = 'cosmetics' | 'cruise' | 'other';
+export type Category = 'cosmetics_info' | 'cosmetics_ad' | 'cruise' | 'other';
 export type TTSEngine = 'edge' | 'typecast';
 export type BuildStatus = 'idle' | 'building' | 'done' | 'error';
 
@@ -43,7 +43,7 @@ export interface AppState {
   category: Category;
   topic: string;
   pexelsKey: string;
-  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels' | 'veo';
+  videoSource: 'upload' | 'youtube' | 'ai' | 'pexels' | 'veo' | 'imagen';
   videos: VideoInfo[];
   youtubeUrls: { url: string; name: string }[];
   generatedTitles: string[];

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { AppState, Category, TTSEngine, VideoInfo, ClipConfig, BuildProgressEvent, VideoResult } from '@/types';
 import WizardLayout from '@/components/WizardLayout';
 import Step1_Category from '@/components/steps/Step1_Category';
@@ -13,11 +13,11 @@ import Step7_Result from '@/components/steps/Step7_Result';
 import Gallery from '@/components/Gallery';
 
 const INITIAL_STATE: AppState = {
-  geminiKey: process.env.NEXT_PUBLIC_GEMINI_KEY || '',
-  pexelsKey: process.env.NEXT_PUBLIC_PEXELS_KEY || '',
+  geminiKey: '',
+  pexelsKey: '',
   currentStep: 0,
   projectId: null,
-  category: 'cruise',
+  category: 'cosmetics_info',
   topic: '',
   videoSource: 'pexels',
   videos: [],
@@ -38,10 +38,39 @@ const INITIAL_STATE: AppState = {
 // 새 순서: 주제(0) → 타이틀(1) → 대본(2) → 영상소스(3) → TTS(4) → 빌드(5) → 결과(6)
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [showGallery, setShowGallery] = useState(false);
+  const [backendConfig, setBackendConfig] = useState<{ gemini_configured: boolean; pexels_configured: boolean } | null>(null);
+
+  // 클라이언트 마운트 후에만 렌더링 (브라우저 확장 프로그램 hydration mismatch 방지)
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // localStorage에서 API 키 복원
+  useEffect(() => {
+    if (!mounted) return;
+    const savedGemini = localStorage.getItem('geminiKey') || '';
+    const savedPexels = localStorage.getItem('pexelsKey') || '';
+    if (savedGemini || savedPexels) {
+      setState(prev => ({ ...prev, geminiKey: savedGemini, pexelsKey: savedPexels }));
+    }
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    fetch('http://localhost:8000/api/config')
+      .then(r => r.json())
+      .then(setBackendConfig)
+      .catch(() => {});
+  }, [mounted]);
 
   const update = useCallback(<K extends keyof AppState>(key: K, value: AppState[K]) => {
+    // API 키 변경 시 localStorage에 저장
+    if (key === 'geminiKey' || key === 'pexelsKey') {
+      localStorage.setItem(key, value as string);
+    }
     setState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
@@ -61,6 +90,8 @@ export default function Home() {
   const handleReset = useCallback(() => {
     setState(INITIAL_STATE);
   }, []);
+
+  if (!mounted) return null;
 
   return (
     <WizardLayout currentStep={state.currentStep}>
@@ -86,10 +117,10 @@ export default function Home() {
       {/* API 키 상태 표시 (env에 키가 없을 때만 입력 필드 노출) */}
       {state.currentStep < 5 && (
         <div className="mb-6 p-3 bg-surface border border-border rounded-lg space-y-2">
-          {process.env.NEXT_PUBLIC_GEMINI_KEY ? (
+          {backendConfig?.gemini_configured ? (
             <div className="flex items-center gap-3">
               <label className="text-sm text-muted whitespace-nowrap w-28">Gemini API</label>
-              <span className="text-success text-xs">환경변수에서 로드됨</span>
+              <span className="text-success text-xs">서버에 설정됨</span>
             </div>
           ) : (
             <div className="flex items-center gap-3">
@@ -108,10 +139,10 @@ export default function Home() {
               )}
             </div>
           )}
-          {process.env.NEXT_PUBLIC_PEXELS_KEY ? (
+          {backendConfig?.pexels_configured ? (
             <div className="flex items-center gap-3">
               <label className="text-sm text-muted whitespace-nowrap w-28">Pexels API</label>
-              <span className="text-success text-xs">환경변수에서 로드됨</span>
+              <span className="text-success text-xs">서버에 설정됨</span>
             </div>
           ) : (
             <div className="flex items-center gap-3">

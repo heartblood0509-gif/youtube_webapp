@@ -5,7 +5,7 @@ import subprocess
 import time
 from fastapi import APIRouter
 from pydantic import BaseModel
-from core.config import PROJECTS_DIR
+from core.config import PROJECTS_DIR, validate_project_id
 
 router = APIRouter()
 
@@ -54,8 +54,9 @@ def gallery():
             path = os.path.join(output_dir, f)
             # ffprobe로 영상 정보 추출
             probe = subprocess.run(
-                f'ffprobe -v quiet -print_format json -show_format -show_streams "{path}"',
-                shell=True, capture_output=True, text=True,
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", "-show_streams", path],
+                capture_output=True, text=True,
             )
             width, height, duration = 0, 0, 0.0
             try:
@@ -81,6 +82,7 @@ def gallery():
 
 @router.delete("/{project_id}")
 def delete_project(project_id: str):
+    validate_project_id(project_id)
     p = os.path.join(PROJECTS_DIR, project_id)
     if os.path.isdir(p):
         shutil.rmtree(p)

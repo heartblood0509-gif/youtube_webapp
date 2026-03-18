@@ -377,6 +377,138 @@ export async function veoGenerateStream(
   return result;
 }
 
+// ─── Nano Banana 2 AI 이미지 생성 ───
+
+export interface ImagenProgressEvent {
+  step: 'prompts' | 'prompts_done' | 'generating' | 'generated' | 'clip_error' | 'done' | 'complete' | 'error';
+  current?: number;
+  total?: number;
+  prompt?: string;
+  prompts?: string[];
+  sentence?: string;
+  filename?: string;
+  count?: number;
+  videos?: unknown[];
+  message?: string;
+}
+
+export async function imagenEstimate(sentenceCount: number) {
+  const res = await fetch(`${BACKEND}/api/imagen/estimate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sentence_count: sentenceCount }),
+  });
+  return res.json();
+}
+
+export async function imagenGenerateStream(
+  projectId: string,
+  geminiKey: string,
+  sentences: string[],
+  category: string,
+  topic: string,
+  onProgress: (event: ImagenProgressEvent) => void,
+): Promise<{ videos: unknown[]; count: number }> {
+  const res = await fetch(`${BACKEND}/api/imagen/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId,
+      gemini_key: geminiKey,
+      sentences,
+      category,
+      topic,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail?.[0]?.msg || `서버 오류: ${res.status}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('스트림을 열 수 없습니다');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = { videos: [] as unknown[], count: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const event: ImagenProgressEvent = JSON.parse(line.slice(6));
+        onProgress(event);
+
+        if (event.step === 'complete') {
+          result = { videos: event.videos || [], count: event.count || 0 };
+        }
+        if (event.step === 'error') {
+          throw new Error(event.message || 'AI 이미지 생성 중 오류');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message !== 'AI 이미지 생성 중 오류') continue;
+        throw e;
+      }
+    }
+  }
+
+  return result;
+}
+
+// ─── Imagen 이미지 미리보기 & 재생성 ───
+
+export interface ImagenPreview {
+  index: number;
+  image: string;
+  video: string | null;
+  image_url: string;
+  video_url: string | null;
+  prompt: string;
+  sentence: string;
+}
+
+export async function imagenGetPreviews(projectId: string): Promise<{
+  previews: ImagenPreview[];
+  prompts: string[];
+  sentences: string[];
+}> {
+  const res = await fetch(`${BACKEND}/api/imagen/preview/${projectId}`);
+  return res.json();
+}
+
+export async function imagenRegenerateOne(
+  projectId: string,
+  geminiKey: string,
+  index: number,
+  prompt: string,
+  effect?: string,
+): Promise<{ filename: string; image: string; index: number; success: boolean; effect: string }> {
+  const res = await fetch(`${BACKEND}/api/imagen/regenerate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_id: projectId,
+      gemini_key: geminiKey,
+      index,
+      prompt,
+      effect: effect || '',
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `재생성 실패: ${res.status}`);
+  }
+  return res.json();
+}
+
 export interface GalleryVideo {
   project_id: string;
   filename: string;

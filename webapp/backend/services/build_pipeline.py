@@ -2,6 +2,7 @@
 YouTube Shorts 9:16 빌드 파이프라인 (웹앱용)
 build_shorts.py 기반, SSE progress callback 추가
 모든 subprocess 호출은 asyncio.to_thread로 비동기 처리하여 이벤트 루프 차단 방지
+모든 명령은 리스트 인수로 전달하여 경로 공백/쉘 주입 안전 처리
 """
 import subprocess
 import os
@@ -21,17 +22,17 @@ logger = logging.getLogger(__name__)
 
 
 def _run_sync(cmd):
-    """동기 subprocess 실행 (스레드 풀에서 호출)"""
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    """동기 subprocess 실행 (스레드 풀에서 호출) — 리스트 인수만 허용"""
+    if isinstance(cmd, str):
+        raise ValueError("보안상 문자열 명령은 허용되지 않습니다. 리스트를 사용하세요.")
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 async def run(cmd, desc=""):
     """비동기 subprocess 실행 - 이벤트 루프 차단 방지"""
     result = await asyncio.to_thread(_run_sync, cmd)
     if result.returncode != 0:
-        # stderr 끝부분에 실제 에러가 있음 (앞부분은 ffmpeg 배너)
         err = result.stderr.strip()
-        # 마지막 3줄 또는 500자 중 더 유용한 쪽 사용
         last_lines = "\n".join(err.split("\n")[-5:])
         raise RuntimeError(f"{desc} 실패: {last_lines[-500:]}")
     return result
@@ -40,7 +41,8 @@ async def run(cmd, desc=""):
 async def get_duration(filepath):
     r = await asyncio.to_thread(
         _run_sync,
-        f'ffprobe -v quiet -show_entries format=duration -of csv=p=0 "{filepath}"',
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "csv=p=0", filepath],
     )
     return float(r.stdout.strip()) if r.stdout.strip() else 0
 
@@ -157,7 +159,8 @@ async def run_build(
         # 소스 영상 비율 감지
         probe = await asyncio.to_thread(
             _run_sync,
-            f'ffprobe -v quiet -show_entries stream=width,height -of csv=p=0:s=x "{src}"',
+            ["ffprobe", "-v", "quiet", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0:s=x", src],
         )
         dims = probe.stdout.strip().split('x') if probe.stdout.strip() else ['0', '0']
         src_w, src_h = int(dims[0] or 0), int(dims[1] or 0)
@@ -169,22 +172,28 @@ async def run_build(
         await emit({"type": "progress", "step": "클립 추출", "step_number": 1, "total_steps": 5, "progress_percent": 10 + int(15 * i / n), "message": f"클립 {i+1}/{n} 추출 중..."})
 
         await run(
-            f'ffmpeg -hide_banner -y -ss {cfg["start"]} -i "{src}" -t {dur} '
-            f'-vf "{crop_vf}" -an -c:v libx264 -preset fast -crf 18 "{out}"',
+            ["ffmpeg", "-hide_banner", "-y", "-ss", str(cfg["start"]),
+             "-i", src, "-t", str(dur),
+             "-vf", crop_vf, "-an",
+             "-c:v", "libx264", "-preset", "fast", "-crf", "18", out],
             f"클립 {i+1}",
         )
 
     # === STEP 2: 클립 연결 ===
     await emit({"type": "progress", "step": "클립 연결", "step_number": 2, "total_steps": 5, "progress_percent": 30, "message": "클립 연결 중..."})
 
-    inputs = " ".join(f'-i "{temp}/clip_{i:02d}.mp4"' for i in range(n))
+    concat_args = ["ffmpeg", "-hide_banner", "-y"]
+    for i in range(n):
+        concat_args.extend(["-i", os.path.join(temp, f"clip_{i:02d}.mp4")])
     streams = "".join(f"[{i}:v]" for i in range(n))
     fc = f'{streams}concat=n={n}:v=1:a=0[outv]'
-    await run(
-        f'ffmpeg -hide_banner -y {inputs} -filter_complex "{fc}" -map "[outv]" '
-        f'-c:v libx264 -preset fast -crf 18 -r 30 -pix_fmt yuv420p "{temp}/concat_raw.mp4"',
-        "클립 연결",
-    )
+    concat_args.extend([
+        "-filter_complex", fc, "-map", "[outv]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-r", "30", "-pix_fmt", "yuv420p",
+        os.path.join(temp, "concat_raw.mp4"),
+    ])
+    await run(concat_args, "클립 연결")
 
     # === STEP 3: 나레이션 정렬 + 오디오 믹싱 ===
     # WAV 파일 존재 확인
@@ -202,29 +211,33 @@ async def run_build(
 
     await emit({"type": "progress", "step": "오디오 믹싱", "step_number": 3, "total_steps": 5, "progress_percent": 50, "message": "나레이션 정렬 + BGM 믹싱 중..."})
 
-    narr_inputs = " ".join(f'-i "{temp}/sent_{i:02d}.wav"' for i in range(n))
-
     if n == 1:
         # 단일 문장: adelay + amix 없이 직접 사용
         await run(
-            f'ffmpeg -hide_banner -y -i "{temp}/sent_00.wav" '
-            f'-af "apad=whole_dur={total_dur}" -t {total_dur} "{temp}/narration_aligned.wav"',
+            ["ffmpeg", "-hide_banner", "-y",
+             "-i", os.path.join(temp, "sent_00.wav"),
+             "-af", f"apad=whole_dur={total_dur}",
+             "-t", str(total_dur),
+             os.path.join(temp, "narration_aligned.wav")],
             "나레이션 정렬",
         )
     else:
         # 복수 문장: 인라인 filter_complex 사용
+        narr_args = ["ffmpeg", "-hide_banner", "-y"]
+        for i in range(n):
+            narr_args.extend(["-i", os.path.join(temp, f"sent_{i:02d}.wav")])
         delays = []
         for i in range(n):
             ms = int(clip_starts[i] * 1000)
             delays.append(f"[{i}]adelay={ms}|{ms}[s{i}]")
         mix_in = "".join(f"[s{i}]" for i in range(n))
         fc_narr = ";".join(delays) + f";{mix_in}amix=inputs={n}:duration=longest:normalize=0"
-
-        await run(
-            f'ffmpeg -hide_banner -y {narr_inputs} '
-            f"-filter_complex '{fc_narr}' -t {total_dur} \"{temp}/narration_aligned.wav\"",
-            "나레이션 정렬",
-        )
+        narr_args.extend([
+            "-filter_complex", fc_narr,
+            "-t", str(total_dur),
+            os.path.join(temp, "narration_aligned.wav"),
+        ])
+        await run(narr_args, "나레이션 정렬")
 
     # BGM 믹싱
     if bgm_path and os.path.exists(bgm_path):
@@ -235,16 +248,26 @@ async def run_build(
             f"[narr][bgm]amix=inputs=2:duration=first:normalize=0[aout]"
         )
         await run(
-            f'ffmpeg -hide_banner -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" -i "{bgm_path}" '
-            f'-filter_complex "{fc_audio}" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 128k '
-            f'-t {total_dur} "{temp}/mixed_audio.mp4"',
+            ["ffmpeg", "-hide_banner", "-y",
+             "-i", os.path.join(temp, "concat_raw.mp4"),
+             "-i", os.path.join(temp, "narration_aligned.wav"),
+             "-i", bgm_path,
+             "-filter_complex", fc_audio,
+             "-map", "0:v", "-map", "[aout]",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+             "-t", str(total_dur),
+             os.path.join(temp, "mixed_audio.mp4")],
             "BGM 믹싱",
         )
     else:
         await run(
-            f'ffmpeg -hide_banner -y -i "{temp}/concat_raw.mp4" -i "{temp}/narration_aligned.wav" '
-            f'-map 0:v -map 1:a -c:v copy -c:a aac -b:a 128k '
-            f'-shortest "{temp}/mixed_audio.mp4"',
+            ["ffmpeg", "-hide_banner", "-y",
+             "-i", os.path.join(temp, "concat_raw.mp4"),
+             "-i", os.path.join(temp, "narration_aligned.wav"),
+             "-map", "0:v", "-map", "1:a",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+             "-shortest",
+             os.path.join(temp, "mixed_audio.mp4")],
             "오디오 합성",
         )
 
@@ -295,8 +318,11 @@ async def run_build(
     await emit({"type": "progress", "step": "자막 오버레이", "step_number": 4, "total_steps": 5, "progress_percent": 80, "message": "렌더링 중... (가장 오래 걸리는 단계)"})
 
     await run(
-        f'ffmpeg -hide_banner -y -i "{temp}/mixed_audio.mp4" -vf "{vf}" '
-        f'-c:v libx264 -preset fast -crf 18 -c:a copy "{output_path}"',
+        ["ffmpeg", "-hide_banner", "-y",
+         "-i", os.path.join(temp, "mixed_audio.mp4"),
+         "-vf", vf,
+         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+         "-c:a", "copy", output_path],
         "오버레이 렌더링",
     )
 
@@ -305,7 +331,8 @@ async def run_build(
 
     probe_result = await asyncio.to_thread(
         _run_sync,
-        f'ffprobe -v quiet -print_format json -show_format -show_streams "{output_path}"',
+        ["ffprobe", "-v", "quiet", "-print_format", "json",
+         "-show_format", "-show_streams", output_path],
     )
     info = json.loads(probe_result.stdout)
     video_stream = next((s for s in info["streams"] if s.get("codec_type") == "video"), {})
